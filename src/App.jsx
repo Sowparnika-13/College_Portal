@@ -11,6 +11,7 @@ import AnnouncementsPage from './pages/AnnouncementsPage'
 import NotFoundPage from './pages/NotFoundPage'
 import Layout from './components/layout/Layout'
 import LoadingSpinner from './components/common/LoadingSpinner'
+import ProfilePage from './pages/ProfilePage'
 
 const ProtectedRoute = ({ children }) => {
   const { user, isLoading } = useAuth()
@@ -52,6 +53,7 @@ function App() {
         <Route path="timetable" element={<TimetablePage />} />
         <Route path="results" element={<ResultsPage />} />
         <Route path="announcements" element={<AnnouncementsPage />} />
+        <Route path="profile" element={<ProfilePage />} />
       </Route>
 
       <Route path="*" element={<NotFoundPage />} />

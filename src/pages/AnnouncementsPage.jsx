@@ -14,6 +14,7 @@ import {
   FaRegBookmark,
   FaRegThumbsUp
 } from 'react-icons/fa'
+import { supabase } from '../services/supabase'
 
 export default function AnnouncementsPage() {
   const { user } = useAuth()
@@ -24,60 +25,52 @@ export default function AnnouncementsPage() {
   const [showComments, setShowComments] = useState({})
   const fileInputRef = useRef(null)
 
+  // Fetch announcements and comments from Supabase
   useEffect(() => {
-    // Simulate API call to fetch announcements
-    setTimeout(() => {
-      setAnnouncements([
-        {
-          id: 1,
-          authorName: 'Dean Williams',
-          authorRole: 'Faculty',
-          content: 'Important announcement: Campus will be closed this Friday for maintenance. All classes are moved online.',
-          timestamp: '5 hours ago',
-          likes: 42,
-          comments: [
-            { id: 1, author: 'John Smith', content: 'Will there be access to the library?', timestamp: '4 hours ago' },
-            { id: 2, author: 'Maria Rodriguez', content: 'Thanks for the update!', timestamp: '3 hours ago' },
-          ],
-          shares: 12,
-          isLiked: false,
-          isBookmarked: false,
-          media: null
-        },
-        {
-          id: 2,
-          authorName: 'Student Council',
-          authorRole: 'Organization',
-          content: 'Don\'t miss our annual cultural festival next week! Performances, food stalls, and many exciting events await. Check out the poster for more details.',
-          timestamp: '1 day ago',
-          likes: 87,
-          comments: [
-            { id: 1, author: 'David Johnson', content: 'Looking forward to this!', timestamp: '20 hours ago' },
-          ],
-          shares: 31,
-          isLiked: true,
-          isBookmarked: true,
-          media: {
-            type: 'image',
-            url: 'https://images.pexels.com/photos/976866/pexels-photo-976866.jpeg'
-          }
-        },
-        {
-          id: 3,
-          authorName: 'Prof. Robert Chen',
-          authorRole: 'Faculty',
-          content: 'Reminder: Research paper submissions are due this Friday. Please follow the formatting guidelines shared in class.',
-          timestamp: '2 days ago',
-          likes: 15,
-          comments: [],
-          shares: 5,
-          isLiked: false,
-          isBookmarked: false,
-          media: null
-        }
-      ])
+    async function fetchAnnouncements() {
+      setLoading(true)
+      // Fetch announcements with user info
+      let { data: announcementsData, error } = await supabase
+        .from('announcements')
+        .select('id, content, created_at, user_id, media_url, users (first_name, last_name, role)')
+        .order('created_at', { ascending: false })
+      if (error) {
+        setLoading(false)
+        return
+      }
+      // Fetch comments for all announcements
+      let { data: commentsData } = await supabase
+        .from('announcement_comments')
+        .select('id, announcement_id, content, created_at, user_id, users (first_name, last_name)')
+        .order('created_at', { ascending: true })
+      // Map comments to announcements
+      const announcementsWithComments = announcementsData.map(a => ({
+        id: a.id,
+        authorName: `${a.users.first_name} ${a.users.last_name}`,
+        authorRole: a.users.role === 'faculty' ? 'Faculty' : 'Student',
+        content: a.content,
+        timestamp: new Date(a.created_at).toLocaleString(),
+        likes: 0, // TODO: fetch likes
+        comments: commentsData
+          ? commentsData.filter(c => c.announcement_id === a.id).map(c => ({
+              id: c.id,
+              author: `${c.users.first_name} ${c.users.last_name}`,
+              content: c.content,
+              timestamp: new Date(c.created_at).toLocaleString(),
+            }))
+          : [],
+        shares: 0, // TODO: fetch shares
+        isLiked: false, // TODO: fetch like state
+        isBookmarked: false, // TODO: fetch bookmark state
+        media: a.media_url && a.media_url.length > 0 ? {
+          type: 'image', // Only image for now
+          url: a.media_url[0]
+        } : null
+      }))
+      setAnnouncements(announcementsWithComments)
       setLoading(false)
-    }, 1000)
+    }
+    fetchAnnouncements()
   }, [])
 
   const handleNewAnnouncementChange = (e) => {
@@ -95,30 +88,80 @@ export default function AnnouncementsPage() {
     fileInputRef.current.click()
   }
 
-  const handleCreateAnnouncement = () => {
+  // Insert new announcement into Supabase
+  const handleCreateAnnouncement = async () => {
     if (!newAnnouncement.trim() && selectedFiles.length === 0) return
-    
-    // In production, send to server
-    const newPost = {
-      id: Date.now(),
-      authorName: `${user.firstName} ${user.lastName}`,
-      authorRole: user.role === 'faculty' ? 'Faculty' : 'Student',
-      content: newAnnouncement,
-      timestamp: 'Just now',
-      likes: 0,
-      comments: [],
-      shares: 0,
-      isLiked: false,
-      isBookmarked: false,
-      media: selectedFiles.length > 0 ? {
-        type: selectedFiles[0].type.includes('image') ? 'image' : 'video',
-        url: URL.createObjectURL(selectedFiles[0]) // This would be a server URL in production
-      } : null
+    let mediaUrls = []
+    // For demo, skip actual upload, just use local URL
+    if (selectedFiles.length > 0) {
+      mediaUrls = [URL.createObjectURL(selectedFiles[0])]
     }
-    
-    setAnnouncements([newPost, ...announcements])
+    const { data, error } = await supabase
+      .from('announcements')
+      .insert({
+        content: newAnnouncement,
+        user_id: user.id,
+        media_url: mediaUrls
+      })
+      .select('id, content, created_at, user_id, media_url')
+      .single()
+    if (error) return
+    // Fetch user info for display
+    const authorName = `${user.first_name} ${user.last_name}`
+    const authorRole = user.role === 'faculty' ? 'Faculty' : 'Student'
+    setAnnouncements([
+      {
+        id: data.id,
+        authorName,
+        authorRole,
+        content: data.content,
+        timestamp: new Date(data.created_at).toLocaleString(),
+        likes: 0,
+        comments: [],
+        shares: 0,
+        isLiked: false,
+        isBookmarked: false,
+        media: mediaUrls.length > 0 ? { type: 'image', url: mediaUrls[0] } : null
+      },
+      ...announcements
+    ])
     setNewAnnouncement('')
     setSelectedFiles([])
+  }
+
+  // Insert new comment into Supabase
+  const addComment = async (id, commentText) => {
+    if (!commentText.trim()) return
+    const { data, error } = await supabase
+      .from('announcement_comments')
+      .insert({
+        announcement_id: id,
+        user_id: user.id,
+        content: commentText
+      })
+      .select('id, content, created_at, user_id')
+      .single()
+    if (error) return
+    // Add comment to state
+    setAnnouncements(announcements.map(announcement => {
+      if (announcement.id === id) {
+        return {
+          ...announcement,
+          comments: [
+            ...announcement.comments,
+            {
+              id: data.id,
+              author: `${user.first_name} ${user.last_name}`,
+              content: data.content,
+              timestamp: new Date(data.created_at).toLocaleString(),
+            }
+          ]
+        }
+      }
+      return announcement
+    }))
+    // Clear comment input
+    document.getElementById(`comment-input-${id}`).value = ''
   }
 
   const toggleLike = (id) => {
@@ -154,30 +197,6 @@ export default function AnnouncementsPage() {
     })
   }
 
-  const addComment = (id, commentText) => {
-    if (!commentText.trim()) return
-    
-    setAnnouncements(announcements.map(announcement => {
-      if (announcement.id === id) {
-        const newComment = {
-          id: Date.now(),
-          author: `${user.firstName} ${user.lastName}`,
-          content: commentText,
-          timestamp: 'Just now'
-        }
-        
-        return {
-          ...announcement,
-          comments: [...announcement.comments, newComment]
-        }
-      }
-      return announcement
-    }))
-    
-    // Clear comment input
-    document.getElementById(`comment-input-${id}`).value = ''
-  }
-
   const handleShare = (id) => {
     // In production, implement sharing functionality
     alert(`Sharing announcement #${id}`)
@@ -205,7 +224,7 @@ export default function AnnouncementsPage() {
         <div className="flex items-start">
           <div className="mr-3">
             <div className="h-10 w-10 rounded-full bg-primary-700 flex items-center justify-center text-white">
-              {user?.firstName?.[0]}{user?.lastName?.[0]}
+              {user?.first_name?.[0]}{user?.last_name?.[0]}
             </div>
           </div>
           <div className="flex-1">
@@ -424,7 +443,7 @@ export default function AnnouncementsPage() {
                 <div className="flex items-center">
                   <div className="mr-2">
                     <div className="h-8 w-8 rounded-full bg-primary-700 flex items-center justify-center text-white text-xs">
-                      {user?.firstName?.[0]}{user?.lastName?.[0]}
+                      {user?.first_name?.[0]}{user?.last_name?.[0]}
                     </div>
                   </div>
                   <div className="flex-1 relative">

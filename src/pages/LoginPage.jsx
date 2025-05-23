@@ -25,8 +25,12 @@ export default function LoginPage() {
 
     try {
       setIsLoading(true)
-      await login(email, password, role) // pass role to login if needed
-      navigate('/')
+      const userData = await login(email, password, role)
+      if (userData) {
+        navigate('/')
+      } else {
+        setError('Failed to load user profile. Please try again.')
+      }
     } catch (err) {
       setError(err.message || 'Failed to login. Please check your credentials.')
     } finally {
