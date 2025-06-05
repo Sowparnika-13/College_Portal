@@ -2,14 +2,65 @@ import { useState, useRef, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { FaBars, FaBell, FaSignOutAlt, FaUserCircle, FaTimes, FaBookmark } from 'react-icons/fa'
 import { useAuth } from '../../contexts/AuthContext'
+import { supabase } from '../../services/supabase'
+import { formatDistanceToNow } from 'date-fns'
 
 export default function Navbar({ toggleSidebar }) {
   const { user, logout } = useAuth()
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [profileDrawerOpen, setProfileDrawerOpen] = useState(false)
+  const [notifications, setNotifications] = useState([])
+  const [loading, setLoading] = useState(true)
   const dropdownRef = useRef(null)
   const notificationsRef = useRef(null)
+
+  // Fetch notifications
+  useEffect(() => {
+    const fetchNotifications = async () => {
+      try {
+        if (!user?.id) return
+
+        const { data, error } = await supabase
+          .from('notifications')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(10)
+
+        if (error) throw error
+
+        setNotifications(data || [])
+      } catch (err) {
+        console.error('Error fetching notifications:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchNotifications()
+
+    // Subscribe to new notifications
+    const channel = supabase
+      .channel('notifications')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user?.id}`
+        },
+        (payload) => {
+          setNotifications(current => [payload.new, ...current])
+        }
+      )
+      .subscribe()
+
+    return () => {
+      channel.unsubscribe()
+    }
+  }, [user?.id])
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -31,13 +82,48 @@ export default function Navbar({ toggleSidebar }) {
   const toggleDropdown = () => setDropdownOpen(!dropdownOpen)
   const toggleNotifications = () => setNotificationsOpen(!notificationsOpen)
 
-  // Example notifications - in a real app these would come from your API
-  const notifications = [
-    { id: 1, message: 'New announcement has been posted', time: '5 minutes ago', read: false },
-    { id: 2, message: 'Your attendance report is ready', time: 'Yesterday', read: true },
-  ]
-
   const unreadCount = notifications.filter(n => !n.read).length
+
+  // Mark notification as read
+  const markAsRead = async (notificationId) => {
+    try {
+      const { error } = await supabase
+        .from('notifications')
+        .update({ read: true })
+        .eq('id', notificationId)
+
+      if (error) throw error
+
+      setNotifications(current =>
+        current.map(notification =>
+          notification.id === notificationId
+            ? { ...notification, read: true }
+            : notification
+        )
+      )
+    } catch (err) {
+      console.error('Error marking notification as read:', err)
+    }
+  }
+
+  // Mark all notifications as read
+  const markAllAsRead = async () => {
+    try {
+      const { error } = await supabase
+        .from('notifications')
+        .update({ read: true })
+        .eq('user_id', user.id)
+        .eq('read', false)
+
+      if (error) throw error
+
+      setNotifications(current =>
+        current.map(notification => ({ ...notification, read: true }))
+      )
+    } catch (err) {
+      console.error('Error marking all notifications as read:', err)
+    }
+  }
 
   return (
     <>
@@ -108,13 +194,22 @@ export default function Navbar({ toggleSidebar }) {
                     <div className="py-2 px-4">
                       <div className="flex items-center justify-between">
                         <h3 className="text-sm font-semibold text-gray-900">Notifications</h3>
-                        <div className="text-xs text-blue-600 cursor-pointer hover:text-blue-800">
-                          Mark all as read
-                        </div>
+                        {unreadCount > 0 && (
+                          <button
+                            onClick={markAllAsRead}
+                            className="text-xs text-blue-600 cursor-pointer hover:text-blue-800"
+                          >
+                            Mark all as read
+                          </button>
+                        )}
                       </div>
                     </div>
                     <div className="max-h-60 overflow-y-auto">
-                      {notifications.length === 0 ? (
+                      {loading ? (
+                        <div className="py-4 px-4 text-center text-gray-500">
+                          Loading notifications...
+                        </div>
+                      ) : notifications.length === 0 ? (
                         <div className="py-4 px-4 text-center text-gray-500">
                           No notifications
                         </div>
@@ -122,12 +217,15 @@ export default function Navbar({ toggleSidebar }) {
                         notifications.map((notification) => (
                           <div 
                             key={notification.id} 
-                            className={`py-3 px-4 ${!notification.read ? 'bg-blue-50' : ''}`}
+                            className={`py-3 px-4 hover:bg-gray-50 cursor-pointer ${!notification.read ? 'bg-blue-50' : ''}`}
+                            onClick={() => markAsRead(notification.id)}
                           >
                             <div className="flex space-x-3">
                               <div className="flex-1 min-w-0">
                                 <p className="text-sm text-gray-900">{notification.message}</p>
-                                <p className="text-xs text-gray-500">{notification.time}</p>
+                                <p className="text-xs text-gray-500">
+                                  {formatDistanceToNow(new Date(notification.created_at), { addSuffix: true })}
+                                </p>
                               </div>
                             </div>
                           </div>
