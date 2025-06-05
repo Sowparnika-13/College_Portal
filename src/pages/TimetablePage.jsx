@@ -15,6 +15,8 @@ export default function TimetablePage() {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [weeklySchedule, setWeeklySchedule] = useState({})
   const [subjects, setSubjects] = useState([])
+  const [showAddSubjectForm, setShowAddSubjectForm] = useState(false)
+  const [subjectError, setSubjectError] = useState(null)
 
   const weekDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
   const timeSlots = ['9:00 AM', '10:00 AM', '11:00 AM', '12:00 PM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM']
@@ -426,6 +428,65 @@ export default function TimetablePage() {
     )
   }
 
+  // Add new subject handler
+  const handleAddSubject = async (e) => {
+    e.preventDefault()
+    if (!isFaculty || !user?.id) return
+
+    try {
+      setLoading(true)
+      setSubjectError(null)
+
+      const subjectCode = e.target.subjectCode.value.trim().toUpperCase()
+      const subjectName = e.target.subjectName.value.trim()
+
+      // Validate inputs
+      if (!subjectCode || !subjectName) {
+        setSubjectError('Subject code and name are required')
+        return
+      }
+
+      // Check if subject code already exists
+      const { data: existingSubject, error: checkError } = await supabase
+        .from('subjects')
+        .select('id')
+        .eq('code', subjectCode)
+        .single()
+
+      if (checkError && checkError.code !== 'PGRST116') {
+        throw checkError
+      }
+
+      if (existingSubject) {
+        setSubjectError('Subject code already exists')
+        return
+      }
+
+      // Insert new subject
+      const { error: insertError } = await supabase
+        .from('subjects')
+        .insert({
+          code: subjectCode,
+          name: subjectName
+        })
+
+      if (insertError) throw insertError
+
+      // Reset form
+      e.target.reset()
+      setShowAddSubjectForm(false)
+
+      // Refresh subjects list
+      await fetchSubjects()
+
+    } catch (err) {
+      console.error('Error adding subject:', err)
+      setSubjectError('Failed to add subject: ' + err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -447,6 +508,64 @@ export default function TimetablePage() {
         <div className="mb-4 p-3 bg-red-50 border-l-4 border-red-500 text-red-700 text-sm">
           <p className="font-medium">Error loading schedule</p>
           <p>{error}</p>
+        </div>
+      )}
+      
+      {isFaculty && (
+        <div className="mb-6">
+          <button
+            onClick={() => setShowAddSubjectForm(!showAddSubjectForm)}
+            className="mb-4 inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+          >
+            {showAddSubjectForm ? 'Cancel' : 'Add New Subject'}
+          </button>
+
+          {showAddSubjectForm && (
+            <div className="bg-white rounded-md shadow-sm p-4 mb-6">
+              <h2 className="text-sm font-medium text-gray-900 mb-3">Add New Subject</h2>
+              {subjectError && (
+                <div className="mb-4 p-3 bg-red-50 border-l-4 border-red-500 text-red-700 text-sm">
+                  <p>{subjectError}</p>
+                </div>
+              )}
+              <form onSubmit={handleAddSubject} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="subjectCode" className="block text-xs font-medium text-gray-700 mb-1">
+                    Subject Code
+                  </label>
+                  <input
+                    type="text"
+                    id="subjectCode"
+                    name="subjectCode"
+                    required
+                    placeholder="e.g., MAD101"
+                    className="w-full rounded-md border-gray-300 shadow-sm text-sm focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="subjectName" className="block text-xs font-medium text-gray-700 mb-1">
+                    Subject Name
+                  </label>
+                  <input
+                    type="text"
+                    id="subjectName"
+                    name="subjectName"
+                    required
+                    placeholder="e.g., Mobile Application Development"
+                    className="w-full rounded-md border-gray-300 shadow-sm text-sm focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <button
+                    type="submit"
+                    className="w-full bg-primary-600 text-white px-3 py-2 rounded-md text-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
+                  >
+                    Add Subject
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
         </div>
       )}
       
