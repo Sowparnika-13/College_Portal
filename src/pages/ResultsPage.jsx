@@ -203,44 +203,73 @@ export default function ResultsPage() {
   }
 
   const handleDeleteResult = async (id) => {
-    if (!id || !user?.id || !isFaculty) return
+    if (!window.confirm('Are you sure you want to delete this result?')) {
+      return
+    }
 
     try {
       setLoading(true)
       setError(null)
 
-      // 1. Get the result to find the file URL
-      const { data: result, error: fetchError } = await supabase
+      console.log('Starting result deletion process...', { id })
+
+      // 1. Get the document details first to ensure it exists and we have permission
+      const { data: document, error: fetchError } = await supabase
         .from('documents')
-        .select('file_url')
+        .select('file_url, uploaded_by')
         .eq('id', id)
         .single()
 
-      if (fetchError) throw fetchError
+      if (fetchError) {
+        console.error('Fetch error:', fetchError)
+        throw new Error('Failed to fetch document details: ' + fetchError.message)
+      }
+
+      if (!document) {
+        throw new Error('Document not found')
+      }
+
+      console.log('Document found:', document)
 
       // 2. Delete from storage if URL exists
-      if (result?.file_url) {
-        const filePath = result.file_url.split('/').pop()
-        const storagePath = `results/${filePath}`
+      if (document.file_url) {
+        // Extract the path after /documents/
+        const fullPath = new URL(document.file_url).pathname
+        const storagePath = fullPath.split('/documents/')[1]
+        
+        if (!storagePath) {
+          console.error('Invalid file path:', document.file_url)
+          throw new Error('Invalid file path')
+        }
+        
+        console.log('Deleting file from storage:', storagePath)
         
         const { error: storageError } = await supabase.storage
           .from('documents')
           .remove([storagePath])
 
-        if (storageError) throw storageError
+        if (storageError) {
+          console.error('Storage deletion error:', storageError)
+          throw new Error('Failed to delete file: ' + storageError.message)
+        }
+
+        console.log('File deleted from storage successfully')
       }
 
       // 3. Delete from database
-      const { error: deleteError } = await supabase
+      const { error: dbError } = await supabase
         .from('documents')
         .delete()
         .eq('id', id)
 
-      if (deleteError) throw deleteError
+      if (dbError) {
+        console.error('Database deletion error:', dbError)
+        throw new Error('Failed to delete document record: ' + dbError.message)
+      }
 
-      // 4. Update UI
+      console.log('Document deleted from database successfully')
       setResults(prev => prev.filter(result => result.id !== id))
-
+      
     } catch (err) {
       console.error('Delete error:', err)
       setError('Failed to delete result: ' + err.message)
