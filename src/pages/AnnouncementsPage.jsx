@@ -12,7 +12,8 @@ import {
   FaPaperPlane,
   FaBookmark,
   FaRegBookmark,
-  FaRegThumbsUp
+  FaRegThumbsUp,
+  FaTrash
 } from 'react-icons/fa'
 import { supabase } from '../services/supabase'
 
@@ -23,110 +24,235 @@ export default function AnnouncementsPage() {
   const [newAnnouncement, setNewAnnouncement] = useState('')
   const [selectedFiles, setSelectedFiles] = useState([])
   const [showComments, setShowComments] = useState({})
+  const [showOptions, setShowOptions] = useState({})
   const fileInputRef = useRef(null)
+  const optionsRef = useRef({})
 
-  // Fetch announcements and comments from Supabase
-  useEffect(() => {
-    async function fetchAnnouncements() {
-      setLoading(true)
-      // Fetch announcements with user info
-      let { data: announcementsData, error } = await supabase
-        .from('announcements')
-        .select('id, content, created_at, user_id, media_url, users (first_name, last_name, role)')
-        .order('created_at', { ascending: false })
-      if (error) {
-        setLoading(false)
-        return
+  // Upload file to Supabase Storage
+  const uploadFile = async (file) => {
+    try {
+      const fileExt = file.name.split('.').pop()
+      const fileName = `${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`
+      const filePath = `announcements/${fileName}`
+
+      // First check if file type is supported
+      if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+        throw new Error('Unsupported file type')
       }
-      // Fetch comments for all announcements
-      let { data: commentsData } = await supabase
-        .from('announcement_comments')
-        .select('id, announcement_id, content, created_at, user_id, users (first_name, last_name)')
-        .order('created_at', { ascending: true })
-      // Map comments to announcements
-      const announcementsWithComments = announcementsData.map(a => ({
-        id: a.id,
-        authorName: `${a.users.first_name} ${a.users.last_name}`,
-        authorRole: a.users.role === 'faculty' ? 'Faculty' : 'Student',
-        content: a.content,
-        timestamp: new Date(a.created_at).toLocaleString(),
-        likes: 0, // TODO: fetch likes
-        comments: commentsData
-          ? commentsData.filter(c => c.announcement_id === a.id).map(c => ({
-              id: c.id,
-              author: `${c.users.first_name} ${c.users.last_name}`,
-              content: c.content,
-              timestamp: new Date(c.created_at).toLocaleString(),
-            }))
-          : [],
-        shares: 0, // TODO: fetch shares
-        isLiked: false, // TODO: fetch like state
-        isBookmarked: false, // TODO: fetch bookmark state
-        media: a.media_url && a.media_url.length > 0 ? {
-          type: 'image', // Only image for now
-          url: a.media_url[0]
-        } : null
-      }))
-      setAnnouncements(announcementsWithComments)
-      setLoading(false)
+
+      // Check file size (10MB limit)
+      if (file.size > 10 * 1024 * 1024) {
+        throw new Error('File size too large (max 10MB)')
+      }
+
+      console.log('Uploading file:', {
+        fileName,
+        fileType: file.type,
+        fileSize: file.size,
+        filePath
+      })
+
+      const { error: uploadError, data } = await supabase.storage
+        .from('media')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false,
+          contentType: file.type,
+          duplex: 'half'
+        })
+
+      if (uploadError) {
+        console.error('Supabase upload error:', uploadError)
+        throw new Error(`Upload failed: ${uploadError.message}`)
+      }
+
+      console.log('Upload successful:', data)
+
+      // Get the public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('media')
+        .getPublicUrl(filePath)
+
+      console.log('Generated public URL:', publicUrl)
+      return publicUrl
+    } catch (err) {
+      console.error('Detailed upload error:', err)
+      throw new Error(`Upload failed: ${err.message}`)
     }
-    fetchAnnouncements()
-  }, [])
-
-  const handleNewAnnouncementChange = (e) => {
-    setNewAnnouncement(e.target.value)
-  }
-
-  const handleFileSelect = (e) => {
-    if (e.target.files.length > 0) {
-      const files = Array.from(e.target.files)
-      setSelectedFiles(files)
-    }
-  }
-
-  const triggerFileInput = () => {
-    fileInputRef.current.click()
   }
 
   // Insert new announcement into Supabase
   const handleCreateAnnouncement = async () => {
     if (!newAnnouncement.trim() && selectedFiles.length === 0) return
-    let mediaUrls = []
-    // For demo, skip actual upload, just use local URL
-    if (selectedFiles.length > 0) {
-      mediaUrls = [URL.createObjectURL(selectedFiles[0])]
-    }
-    const { data, error } = await supabase
-      .from('announcements')
-      .insert({
-        content: newAnnouncement,
-        user_id: user.id,
-        media_url: mediaUrls
-      })
-      .select('id, content, created_at, user_id, media_url')
-      .single()
-    if (error) return
-    // Fetch user info for display
-    const authorName = `${user.first_name} ${user.last_name}`
-    const authorRole = user.role === 'faculty' ? 'Faculty' : 'Student'
-    setAnnouncements([
-      {
-        id: data.id,
-        authorName,
-        authorRole,
-        content: data.content,
-        timestamp: new Date(data.created_at).toLocaleString(),
+    
+    try {
+      setLoading(true)
+      let mediaUrls = []
+
+      // Upload files if any
+      if (selectedFiles.length > 0) {
+        try {
+          console.log('Starting file upload process for:', selectedFiles.map(f => f.name))
+          const uploadPromises = selectedFiles.map(file => uploadFile(file))
+          mediaUrls = await Promise.all(uploadPromises)
+          console.log('Successfully uploaded files:', mediaUrls)
+        } catch (error) {
+          console.error('Detailed file upload error:', error)
+          alert(`Failed to upload media: ${error.message}`)
+          setLoading(false)
+          return
+        }
+      }
+
+      // Create the announcement
+      const { data: announcement, error: announcementError } = await supabase
+        .from('announcements')
+        .insert({
+          content: newAnnouncement,
+          user_id: user.id,
+          media_url: mediaUrls
+        })
+        .select('id, content, created_at, user_id, media_url')
+        .single()
+
+      if (announcementError) {
+        console.error('Announcement creation error:', announcementError)
+        throw new Error(`Failed to create announcement: ${announcementError.message}`)
+      }
+
+      // Get user info for display
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('first_name, last_name, role')
+        .eq('id', user.id)
+        .single()
+
+      if (userError) {
+        console.error('User data fetch error:', userError)
+        throw new Error(`Failed to fetch user data: ${userError.message}`)
+      }
+
+      // Add the new announcement to state
+      const newAnnouncementObj = {
+        id: announcement.id,
+        authorName: `${userData.first_name} ${userData.last_name}`,
+        authorRole: userData.role === 'faculty' ? 'Faculty' : 'Student',
+        content: announcement.content,
+        timestamp: new Date(announcement.created_at).toLocaleString(),
         likes: 0,
         comments: [],
         shares: 0,
         isLiked: false,
         isBookmarked: false,
-        media: mediaUrls.length > 0 ? { type: 'image', url: mediaUrls[0] } : null
-      },
-      ...announcements
-    ])
-    setNewAnnouncement('')
-    setSelectedFiles([])
+        media: announcement.media_url && announcement.media_url.length > 0 ? {
+          type: getFileType(announcement.media_url[0]),
+          url: announcement.media_url[0]
+        } : null
+      }
+
+      setAnnouncements([newAnnouncementObj, ...announcements])
+      setNewAnnouncement('')
+      setSelectedFiles([])
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    } catch (err) {
+      console.error('Detailed announcement creation error:', err)
+      alert(`Failed to create announcement: ${err.message}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Fetch announcements and comments from Supabase
+  useEffect(() => {
+    async function fetchAnnouncements() {
+      setLoading(true)
+      try {
+        // Fetch announcements with user info
+        let { data: announcementsData, error } = await supabase
+          .from('announcements')
+          .select('id, content, created_at, user_id, media_url, users (first_name, last_name, role)')
+          .order('created_at', { ascending: false })
+
+        if (error) throw error
+
+        // Fetch comments for all announcements
+        let { data: commentsData } = await supabase
+          .from('announcement_comments')
+          .select('id, announcement_id, content, created_at, user_id, users (first_name, last_name)')
+          .order('created_at', { ascending: true })
+
+        // Map comments to announcements
+        const announcementsWithComments = announcementsData.map(a => ({
+          id: a.id,
+          authorName: `${a.users.first_name} ${a.users.last_name}`,
+          authorRole: a.users.role === 'faculty' ? 'Faculty' : 'Student',
+          content: a.content,
+          timestamp: new Date(a.created_at).toLocaleString(),
+          likes: 0, // TODO: fetch likes
+          comments: commentsData
+            ? commentsData.filter(c => c.announcement_id === a.id).map(c => ({
+                id: c.id,
+                author: `${c.users.first_name} ${c.users.last_name}`,
+                content: c.content,
+                timestamp: new Date(c.created_at).toLocaleString(),
+              }))
+            : [],
+          shares: 0,
+          isLiked: false,
+          isBookmarked: false,
+          media: a.media_url && a.media_url.length > 0 ? {
+            type: getFileType(a.media_url[0]),
+            url: a.media_url[0]
+          } : null
+        }))
+
+        setAnnouncements(announcementsWithComments)
+      } catch (err) {
+        console.error('Error fetching announcements:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchAnnouncements()
+  }, [])
+
+  // Helper function to determine file type
+  const getFileType = (url) => {
+    const extension = url.split('.').pop().toLowerCase()
+    const imageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp']
+    const videoExtensions = ['mp4', 'webm', 'ogg']
+    
+    if (imageExtensions.includes(extension)) return 'image'
+    if (videoExtensions.includes(extension)) return 'video'
+    return 'image' // default to image if unknown
+  }
+
+  // Handle file selection with validation
+  const handleFileSelect = (e) => {
+    const files = Array.from(e.target.files)
+    const validFiles = files.filter(file => {
+      const isValid = file.type.startsWith('image/') || file.type.startsWith('video/')
+      const isValidSize = file.size <= 10 * 1024 * 1024 // 10MB limit
+      return isValid && isValidSize
+    })
+
+    if (validFiles.length !== files.length) {
+      // You might want to show an error message to the user here
+      console.warn('Some files were rejected due to invalid type or size')
+    }
+
+    setSelectedFiles(validFiles)
+  }
+
+  const handleNewAnnouncementChange = (e) => {
+    setNewAnnouncement(e.target.value)
+  }
+
+  const triggerFileInput = () => {
+    fileInputRef.current.click()
   }
 
   // Insert new comment into Supabase
@@ -201,6 +327,72 @@ export default function AnnouncementsPage() {
     // In production, implement sharing functionality
     alert(`Sharing announcement #${id}`)
   }
+
+  // Handle delete announcement
+  const handleDeleteAnnouncement = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this announcement?')) {
+      return
+    }
+
+    try {
+      setLoading(true)
+
+      // First, delete any associated media from storage
+      const announcement = announcements.find(a => a.id === id)
+      if (announcement?.media?.url) {
+        const mediaPath = announcement.media.url.split('/').pop() // Get filename from URL
+        const { error: storageError } = await supabase.storage
+          .from('media')
+          .remove([`announcements/${mediaPath}`])
+
+        if (storageError) {
+          console.error('Error deleting media:', storageError)
+        }
+      }
+
+      // Delete the announcement from the database
+      const { error: deleteError } = await supabase
+        .from('announcements')
+        .delete()
+        .eq('id', id)
+
+      if (deleteError) throw deleteError
+
+      // Update local state
+      setAnnouncements(announcements.filter(a => a.id !== id))
+      setShowOptions({})
+    } catch (err) {
+      console.error('Error deleting announcement:', err)
+      alert('Failed to delete announcement. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Toggle options menu
+  const toggleOptions = (id) => {
+    setShowOptions(prev => ({
+      ...prev,
+      [id]: !prev[id]
+    }))
+  }
+
+  // Close options menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      Object.entries(optionsRef.current).forEach(([id, ref]) => {
+        if (ref && !ref.contains(event.target)) {
+          setShowOptions(prev => ({
+            ...prev,
+            [id]: false
+          }))
+        }
+      })
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   if (loading) {
     return (
@@ -316,12 +508,28 @@ export default function AnnouncementsPage() {
                   </div>
                 </div>
               </div>
-              <button
-                type="button"
-                className="text-gray-500 hover:text-gray-700"
-              >
-                <FaEllipsisH />
-              </button>
+              <div className="relative" ref={el => optionsRef.current[announcement.id] = el}>
+                <button
+                  type="button"
+                  className="text-gray-500 hover:text-gray-700 p-1"
+                  onClick={() => toggleOptions(announcement.id)}
+                >
+                  <FaEllipsisH />
+                </button>
+                {showOptions[announcement.id] && (
+                  <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50 py-1">
+                    {(user.id === announcement.user_id || user.role === 'faculty') && (
+                      <button
+                        onClick={() => handleDeleteAnnouncement(announcement.id)}
+                        className="flex items-center w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50"
+                      >
+                        <FaTrash className="mr-2" />
+                        Delete Announcement
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
             
             {/* Post Content */}
@@ -336,14 +544,15 @@ export default function AnnouncementsPage() {
                   <img 
                     src={announcement.media.url} 
                     alt="Announcement" 
-                    className="w-full h-auto object-cover max-h-96" 
+                    className="w-full h-auto object-contain max-h-[500px]" 
+                    loading="lazy"
                   />
                 ) : (
                   <video 
                     src={announcement.media.url} 
                     controls 
-                    className="w-full" 
-                  ></video>
+                    className="w-full max-h-[500px]" 
+                  />
                 )}
               </div>
             )}
