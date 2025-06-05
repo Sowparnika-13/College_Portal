@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../services/supabase';
 import {
   FaChartBar,
   FaCalendarAlt,
@@ -10,46 +11,57 @@ import {
   FaUserGraduate,
   FaChalkboardTeacher,
 } from 'react-icons/fa';
-
-import api from '../services/api';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import { formatDistanceToNow } from 'date-fns';
 
 export default function Dashboard() {
-  const { user, isStudent, isFaculty } = useAuth();
-  const [dashboardData, setDashboardData] = useState(null);
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
+  const [recentAnnouncements, setRecentAnnouncements] = useState([]);
+  const isStudent = user?.role === 'student';
 
+  // Fetch recent announcements
   useEffect(() => {
-    async function fetchDashboardData() {
+    const fetchRecentAnnouncements = async () => {
       try {
-        const response = await api.get('/dashboard');
-        setDashboardData(response.data);
-      } catch (error) {
-        console.error('Error fetching dashboard data:', error);
+        setLoading(true);
+        const { data, error } = await supabase
+          .from('announcements')
+          .select(`
+            id,
+            content,
+            created_at,
+            users (
+              first_name,
+              last_name,
+              role
+            )
+          `)
+          .order('created_at', { ascending: false })
+          .limit(3);
+
+        if (error) throw error;
+
+        const formattedAnnouncements = data.map(announcement => ({
+          id: announcement.id,
+          title: announcement.content.split('\n')[0] || 'Announcement',
+          preview: announcement.content.split('\n').slice(1).join('\n') || announcement.content,
+          date: announcement.created_at,
+          author: `${announcement.users.first_name} ${announcement.users.last_name}`,
+          authorRole: announcement.users.role
+        }));
+
+        setRecentAnnouncements(formattedAnnouncements);
+      } catch (err) {
+        console.error('Error fetching announcements:', err);
       } finally {
         setLoading(false);
       }
-    }
+    };
 
-    fetchDashboardData();
+    fetchRecentAnnouncements();
   }, []);
 
-  // Log user to debug
-  console.log('Dashboard user:', user);
-
-  if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <LoadingSpinner size="lg" />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <div>Loading user data...</div>;
-  }
-
-  // Dashboard cards
   const dashboardItems = [
     {
       id: 'attendance',
@@ -97,24 +109,6 @@ export default function Dashboard() {
       bgColor: 'bg-amber-100',
       link: '/announcements',
       description: 'Community announcements and updates',
-    },
-  ];
-
-  // Sample recent announcements (could come from API)
-  const recentAnnouncements = [
-    {
-      id: 1,
-      title: 'Campus Tour Schedule',
-      preview: 'New students campus tour scheduled for next Friday at 10 AM.',
-      date: 'July 15, 2025',
-      author: 'Dean Williams',
-    },
-    {
-      id: 2,
-      title: 'Upcoming Exams',
-      preview: 'Final exams schedule has been published. Check your timetable.',
-      date: 'July 10, 2025',
-      author: 'Academic Office',
     },
   ];
 
@@ -175,7 +169,11 @@ export default function Dashboard() {
         </div>
 
         <div className="bg-white rounded-lg shadow-md divide-y divide-gray-200">
-          {recentAnnouncements.length > 0 ? (
+          {loading ? (
+            <div className="p-4 text-center">
+              <LoadingSpinner size="md" />
+            </div>
+          ) : recentAnnouncements.length > 0 ? (
             recentAnnouncements.map((announcement) => (
               <div
                 key={announcement.id}
@@ -184,16 +182,17 @@ export default function Dashboard() {
                 <h3 className="text-md font-medium text-gray-900 mb-1">{announcement.title}</h3>
                 <p className="text-sm text-gray-600 mb-2">{announcement.preview}</p>
                 <div className="flex justify-between text-xs text-gray-400">
-                  <span>{announcement.date}</span>
+                  <span>{formatDistanceToNow(new Date(announcement.date), { addSuffix: true })}</span>
                   <span>By {announcement.author}</span>
                 </div>
               </div>
             ))
           ) : (
-            <p className="p-4 text-gray-600">No announcements at this time.</p>
+            <p className="p-4 text-gray-600 text-center">No announcements at this time.</p>
           )}
         </div>
       </div>
     </div>
   );
 }
+
