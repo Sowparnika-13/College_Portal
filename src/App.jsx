@@ -12,6 +12,7 @@ import NotFoundPage from './pages/NotFoundPage'
 import Layout from './components/layout/Layout'
 import LoadingSpinner from './components/common/LoadingSpinner'
 import ProfilePage from './pages/ProfilePage'
+import SavedPosts from './pages/SavedPosts'
 
 const ProtectedRoute = ({ children }) => {
   const { user, isLoading } = useAuth()
@@ -54,6 +55,7 @@ function App() {
         <Route path="results" element={<ResultsPage />} />
         <Route path="announcements" element={<AnnouncementsPage />} />
         <Route path="profile" element={<ProfilePage />} />
+        <Route path="saved" element={<SavedPosts />} />
       </Route>
 
       <Route path="*" element={<NotFoundPage />} />
