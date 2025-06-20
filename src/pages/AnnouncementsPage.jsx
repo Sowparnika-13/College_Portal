@@ -27,6 +27,7 @@ export default function AnnouncementsPage() {
   const [showOptions, setShowOptions] = useState({})
   const fileInputRef = useRef(null)
   const optionsRef = useRef({})
+  const [savedPosts, setSavedPosts] = useState([])
 
   // Upload file to Supabase Storage
   const uploadFile = async (file) => {
@@ -169,55 +170,70 @@ export default function AnnouncementsPage() {
     async function fetchAnnouncements() {
       setLoading(true)
       try {
-        // Fetch announcements with user info
-        let { data: announcementsData, error } = await supabase
-          .from('announcements')
-          .select('id, content, created_at, user_id, media_url, users (first_name, last_name, role)')
-          .order('created_at', { ascending: false })
+      // Fetch announcements with user info
+      let { data: announcementsData, error } = await supabase
+        .from('announcements')
+        .select('id, content, created_at, user_id, media_url, users (first_name, last_name, role)')
+        .order('created_at', { ascending: false })
 
         if (error) throw error
 
-        // Fetch comments for all announcements
-        let { data: commentsData } = await supabase
-          .from('announcement_comments')
-          .select('id, announcement_id, content, created_at, user_id, users (first_name, last_name)')
-          .order('created_at', { ascending: true })
+      // Fetch comments for all announcements
+      let { data: commentsData } = await supabase
+        .from('announcement_comments')
+        .select('id, announcement_id, content, created_at, user_id, users (first_name, last_name)')
+        .order('created_at', { ascending: true })
 
-        // Map comments to announcements
-        const announcementsWithComments = announcementsData.map(a => ({
-          id: a.id,
-          authorName: `${a.users.first_name} ${a.users.last_name}`,
-          authorRole: a.users.role === 'faculty' ? 'Faculty' : 'Student',
-          content: a.content,
-          timestamp: new Date(a.created_at).toLocaleString(),
-          likes: 0, // TODO: fetch likes
-          comments: commentsData
-            ? commentsData.filter(c => c.announcement_id === a.id).map(c => ({
-                id: c.id,
-                author: `${c.users.first_name} ${c.users.last_name}`,
-                content: c.content,
-                timestamp: new Date(c.created_at).toLocaleString(),
-              }))
-            : [],
+      // Map comments to announcements
+      const announcementsWithComments = announcementsData.map(a => ({
+        id: a.id,
+        authorName: `${a.users.first_name} ${a.users.last_name}`,
+        authorRole: a.users.role === 'faculty' ? 'Faculty' : 'Student',
+        content: a.content,
+        timestamp: new Date(a.created_at).toLocaleString(),
+        likes: 0, // TODO: fetch likes
+        comments: commentsData
+          ? commentsData.filter(c => c.announcement_id === a.id).map(c => ({
+              id: c.id,
+              author: `${c.users.first_name} ${c.users.last_name}`,
+              content: c.content,
+              timestamp: new Date(c.created_at).toLocaleString(),
+            }))
+          : [],
           shares: 0,
           isLiked: false,
           isBookmarked: false,
-          media: a.media_url && a.media_url.length > 0 ? {
+        media: a.media_url && a.media_url.length > 0 ? {
             type: getFileType(a.media_url[0]),
-            url: a.media_url[0]
-          } : null
-        }))
+          url: a.media_url[0]
+        } : null
+      }))
 
-        setAnnouncements(announcementsWithComments)
+      setAnnouncements(announcementsWithComments)
       } catch (err) {
         console.error('Error fetching announcements:', err)
       } finally {
-        setLoading(false)
+      setLoading(false)
       }
     }
 
     fetchAnnouncements()
   }, [])
+
+  // Fetch which announcements are saved by the user
+  useEffect(() => {
+    if (!user) return
+    const fetchSavedPosts = async () => {
+      const { data, error } = await supabase
+        .from('saved_posts')
+        .select('announcement_id')
+        .eq('user_id', user.auth_id)
+      if (!error && data) {
+        setSavedPosts(data.map(d => d.announcement_id))
+      }
+    }
+    fetchSavedPosts()
+  }, [user])
 
   // Helper function to determine file type
   const getFileType = (url) => {
@@ -304,16 +320,51 @@ export default function AnnouncementsPage() {
     }))
   }
 
-  const toggleBookmark = (id) => {
-    setAnnouncements(announcements.map(announcement => {
-      if (announcement.id === id) {
-        return {
-          ...announcement,
-          isBookmarked: !announcement.isBookmarked
+  // Toggle saving a post
+  const handleToggleSave = async (announcementId) => {
+    if (!user || !user.auth_id) {
+      console.error('Save failed: User is not loaded or does not have an Auth ID.', { user })
+      alert('Could not save post. Please ensure you are logged in and try again.')
+      return
+    }
+
+    const isSaved = savedPosts.includes(announcementId)
+    console.log(`Toggling save for announcement: ${announcementId}. Currently saved: ${isSaved}. User AUTH_ID: ${user.auth_id}`)
+
+    try {
+      if (isSaved) {
+        // Unsave the post
+        const { error } = await supabase
+          .from('saved_posts')
+          .delete()
+          .eq('user_id', user.auth_id)
+          .eq('announcement_id', announcementId)
+        
+        if (error) throw error
+
+        setSavedPosts(savedPosts.filter(id => id !== announcementId))
+        console.log('Post unsaved successfully.')
+      } else {
+        // Save the post
+        const { error } = await supabase
+          .from('saved_posts')
+          .insert({
+            user_id: user.auth_id,
+            announcement_id: announcementId
+          })
+        
+        if (error) {
+          console.error('Save error:', error)
+          throw new Error(error.message)
         }
+        
+        setSavedPosts([...savedPosts, announcementId])
+        console.log('Post saved successfully.')
       }
-      return announcement
-    }))
+    } catch (error) {
+      console.error('Failed to toggle save state:', error)
+      alert(`Failed to save post: ${error.message}`)
+    }
   }
 
   const toggleComments = (id) => {
@@ -509,13 +560,13 @@ export default function AnnouncementsPage() {
                 </div>
               </div>
               <div className="relative" ref={el => optionsRef.current[announcement.id] = el}>
-                <button
-                  type="button"
+              <button
+                type="button"
                   className="text-gray-500 hover:text-gray-700 p-1"
                   onClick={() => toggleOptions(announcement.id)}
-                >
-                  <FaEllipsisH />
-                </button>
+              >
+                <FaEllipsisH />
+              </button>
                 {showOptions[announcement.id] && (
                   <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50 py-1">
                     {(user.id === announcement.user_id || user.role === 'faculty') && (
@@ -614,13 +665,13 @@ export default function AnnouncementsPage() {
               <button
                 type="button"
                 className={`flex items-center px-2 py-1 rounded-md ${
-                  announcement.isBookmarked 
+                  savedPosts.includes(announcement.id)
                     ? 'text-primary-700 hover:bg-primary-50' 
                     : 'text-gray-600 hover:bg-gray-100'
                 }`}
-                onClick={() => toggleBookmark(announcement.id)}
+                onClick={() => handleToggleSave(announcement.id)}
               >
-                {announcement.isBookmarked ? (
+                {savedPosts.includes(announcement.id) ? (
                   <FaBookmark className="mr-1" />
                 ) : (
                   <FaRegBookmark className="mr-1" />
